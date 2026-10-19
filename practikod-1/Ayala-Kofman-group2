@@ -1,0 +1,317 @@
+// Author: AyalaKofman
+// Source: Program.cs
+using System.CommandLine;
+using System.Text;
+var rootCommand = new RootCommand("bundle files to one file ");
+//Command
+Command bundleCommand = new Command("bundle", "First-level bundleCommand");
+rootCommand.Subcommands.Add(bundleCommand);
+Command createRspCommand = new Command("create-rsp","fitcher to easy the used in command");
+rootCommand.Subcommands.Add(createRspCommand);
+//Option
+var languageOption = new Option<string[]>("--language", "-lang")
+{
+    Description = "language in computers",
+    Required = true,
+};
+var outputOption = new Option<string>("--output", "-o")
+{
+    Description = "output the folder",
+    Required = true, 
+};
+var noteOption = new Option<bool>("--note", "-n")
+{
+    Description = "the sourse of the file",
+    //הערה עם מקור הקוד - שם וניתוב יחסי של קובץ הקוד המקורי.=path+fileName
+};
+var sortOption = new Option<string>("--sort", "-s")
+{
+    Description = "sort the files according to name or typ code",
+    DefaultValueFactory=_=>"name"
+};
+var removeEmptyLineOption = new Option<bool>("--remove-empty-lines", "-remLine")
+{ 
+    Description = "removeEmptyLine in the file"
+};
+var authorOption = new Option<string>("--author", "-a")
+{
+    Description = "Name of the bundle author"
+};
+bundleCommand.Options.Add(languageOption);
+bundleCommand.Options.Add(outputOption);
+bundleCommand.Options.Add(noteOption);
+bundleCommand.Options.Add(sortOption);
+bundleCommand.Options.Add(removeEmptyLineOption);
+bundleCommand.Options.Add(authorOption);
+string[] supportedLanguages = { ".cs", ".py", ".java", ".c", ".js", ".css", ".html" };
+static string QuoteRspValue(string value)
+{
+    return "\"" + value.Replace("\"", "\\\"") + "\"";
+}
+//Action
+bundleCommand.SetAction(parseResult =>
+{
+    string[] languages = parseResult.GetValue(languageOption) ?? Array.Empty<string>();
+    string output = parseResult.GetValue(outputOption)!;
+    bool note = parseResult.GetValue(noteOption);
+    string sort = parseResult.GetValue(sortOption) ?? "name";
+    bool removeEmptyLines = parseResult.GetValue(removeEmptyLineOption);
+    string? author = parseResult.GetValue(authorOption);
+    string rootPath = Directory.GetCurrentDirectory();
+    string outputPath = Path.GetFullPath(output);
+    try
+    {
+        if (!Directory.Exists(Path.GetDirectoryName(outputPath)))
+        {
+            Console.WriteLine("Error: output directory does not exist.");
+            return;
+        }
+        if (sort != "name" && sort != "type")
+        {
+            Console.WriteLine("Error: sort must be 'name' or 'type'.");
+            return;
+        }
+        string[] selectedExtensions;
+        if (languages.Length == 1 && languages[0].Equals("all", StringComparison.OrdinalIgnoreCase))
+                selectedExtensions = supportedLanguages;
+        else
+        {
+           selectedExtensions = languages.Select(language => language.StartsWith(".") ? language : "." + language).ToArray();
+            if (selectedExtensions.Any(ext =>
+                !supportedLanguages.Contains(
+                    ext, StringComparer.OrdinalIgnoreCase)))
+            {
+                Console.WriteLine("Error: unsupported language.");
+                return;
+            }
+        }
+        var excludedDirectories = new HashSet<string>(
+            new[] { "bin", "obj", "debug", "release",
+                    ".vs", "publish" },
+            StringComparer.OrdinalIgnoreCase);
+        var files = Directory
+            .EnumerateFiles(rootPath, "*", SearchOption.AllDirectories)
+            .Where(file =>
+            {
+                string relativePath =
+                    Path.GetRelativePath(rootPath, file);
+                string[] parts = relativePath.Split(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+                return !parts.Take(parts.Length - 1)
+                    .Any(part => excludedDirectories.Contains(part))
+                    && !string.Equals(
+                        Path.GetFullPath(file),
+                        outputPath,
+                        StringComparison.OrdinalIgnoreCase)
+                    && selectedExtensions.Contains(
+                        Path.GetExtension(file),
+                        StringComparer.OrdinalIgnoreCase);
+            });
+        files = sort == "name"
+            ? files.OrderBy(
+                file => Path.GetFileName(file),
+                StringComparer.OrdinalIgnoreCase)
+            : files.OrderBy(
+                file => Path.GetExtension(file),
+                StringComparer.OrdinalIgnoreCase)
+                .ThenBy(
+                    file => Path.GetFileName(file),
+                    StringComparer.OrdinalIgnoreCase);
+        var bundle = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(author))
+            bundle.AppendLine($"// Author: {author}");
+        foreach (string file in files)
+        {
+            string relativePath =
+                Path.GetRelativePath(rootPath, file);
+            if (note)
+                bundle.AppendLine($"// Source: {relativePath}");
+            string content = File.ReadAllText(file);
+            if (removeEmptyLines)
+            {
+                content = string.Join(
+                    Environment.NewLine,
+                    content.Split(
+                        new[] { "\r\n", "\n", "\r" },
+                        StringSplitOptions.None)
+                    .Where(line => !string.IsNullOrWhiteSpace(line)));
+            }
+            bundle.AppendLine(content);
+            bundle.AppendLine();
+        }
+        File.WriteAllText(outputPath, bundle.ToString());
+        Console.WriteLine(
+            $"Bundle created successfully: {outputPath}");
+    }
+    catch (Exception ex) when (
+        ex is IOException ||
+        ex is UnauthorizedAccessException ||
+        ex is ArgumentException ||
+        ex is NotSupportedException ||
+        ex is System.Security.SecurityException)
+    {
+        Console.WriteLine($"Error: {ex.Message}");
+    }
+}); 
+createRspCommand.SetAction(ParseResult =>
+{
+    string[] language = ReadValidLanguages(supportedLanguages);
+    string output = ReadValidOutputPath();
+    bool note = AddPathAndName();
+    string sort = sortFiles();
+    bool removeEmptyLine = removeLines();
+    string author = AddAuthor();
+    var rspLines = new List<string>
+    {
+        "bundle",
+        "--language"
+    };
+    if (language.Length == 1 && language[0].Equals("all", StringComparison.OrdinalIgnoreCase))
+        rspLines.Add("all");
+    else
+        rspLines.AddRange(language.Select(QuoteRspValue));
+    rspLines.Add("--output");
+    rspLines.Add(QuoteRspValue(output));
+    if (note)
+        rspLines.Add("--note");
+    rspLines.Add("--sort");
+    rspLines.Add(QuoteRspValue(sort));
+    if (removeEmptyLine)
+        rspLines.Add("--remove-empty-lines");
+    if (!string.IsNullOrWhiteSpace(author))
+    {
+        rspLines.Add("--author");
+        rspLines.Add(QuoteRspValue(author));
+    }
+    string rspFileName = "bundle.rsp";
+    try
+    {
+        File.WriteAllLines(rspFileName, rspLines);
+        Console.WriteLine($"Response file created: {Path.GetFullPath(rspFileName)}");
+    }
+    catch (IOException ex)
+    {
+        Console.WriteLine($"Error writing response file: {ex.Message}");
+    }
+    catch (UnauthorizedAccessException)
+    {
+        Console.WriteLine("Error: no permission to write the file.");
+    }
+});
+static string ReadValidOutputPath()
+{
+    while (true)
+    {
+        Console.Write("enter a path/fileName");
+        string? output = Console.ReadLine();
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            Console.WriteLine("Error:the is empty");
+            continue;
+        }
+        try
+        {
+            string path = Path.GetFullPath(output);
+            string  directory = Path.GetDirectoryName(path);
+            if (directory is null || !Directory.Exists(directory))
+            {
+                Console.WriteLine("Error: output directory does not exist.");
+                continue;
+            }
+            return path;
+        }
+        catch (ArgumentNullException)
+        {
+            Console.WriteLine("Error:the value is null");
+        }
+        catch (ArgumentException)
+        {
+            Console.WriteLine("Error:the path is invalid or the directory does not exist");
+        }
+        catch (NotSupportedException)
+        {
+            Console.WriteLine("Erroe");
+        }
+        catch (PathTooLongException)
+        {
+            Console.WriteLine("Error:the path is longest");
+        }
+        catch (IOException)
+        {
+            Console.WriteLine("Error:IOException");
+        }
+    }
+}
+static string[] ReadValidLanguages(string[] supportedLanguages)
+{
+    while (true)
+    {
+        Console.WriteLine("enter the languages with ',' between anouter or 'all' ");
+        string? input = Console.ReadLine();
+        if (input == "all")
+            return ["all"];
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            Console.WriteLine("this required");
+            continue;
+        }
+        string[] languages = input.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        string[] invalidLanguages = languages.Where(language => !supportedLanguages.Contains(language,
+                                                        StringComparer.OrdinalIgnoreCase)).ToArray();
+        if (languages.Length == 0|| invalidLanguages.Length>0)
+        {
+            Console.WriteLine("the languages not support");
+            continue;
+        }
+        else
+            return languages;
+    }
+}
+static bool AddPathAndName()
+{
+    Console.WriteLine("enter true if you want add a path$name else enter false");
+    string addPath = Console.ReadLine();
+    if (addPath == "true")
+        return true;
+    return false;
+}
+static string sortFiles()
+{
+    while (true)
+    {
+        Console.WriteLine("Enter 1 to sort by name or 2 to sort by type:");
+        if (int.TryParse(Console.ReadLine(), out int press))
+        {
+            if (press == 1)
+                return "name";
+            if (press == 2)
+                return "type";
+        }
+        Console.WriteLine("Invalid input. Enter 1 or 2.");
+    }
+}
+static bool removeLines()
+{
+    while (true)
+    {
+        Console.WriteLine(
+            "Remove empty lines? Enter 1 for yes or 2 for no:");
+        if (int.TryParse(Console.ReadLine(), out int press))
+        {
+            if (press == 1)
+                return true;
+            if (press == 2)
+                return false;
+        }
+        Console.WriteLine("Invalid input. Enter 1 or 2.");
+    }
+}
+static string AddAuthor()
+{
+    Console.Write("Enter author name (or leave empty): ");
+    string author = Console.ReadLine();
+    return author;
+}
+return rootCommand.Parse(args).Invoke();
+

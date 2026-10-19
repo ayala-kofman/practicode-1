@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "practikod-1": {
+      "commandName": "Project",
+      "commandLineArgs": "bundle -lang c# -output file.txt"
+    }
+  }
+}
